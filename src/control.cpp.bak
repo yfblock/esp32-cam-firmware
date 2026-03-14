@@ -1,0 +1,179 @@
+#include <Arduino.h>
+#include <string.h>
+#include "driver/spi_slave.h"
+#include "esp_heap_caps.h"
+#include "control.h"
+#include "esp_camera.h"
+#include "sensor.h"
+#include "jpeg_data.h"
+
+#define SPI_SLAVE_HOST  SPI2_HOST
+#define PIN_SCLK        12
+#define PIN_MOSI        11
+#define PIN_MISO        20
+#define PIN_CS          10
+#define DMA_BUF_SIZE    8192
+
+static uint8_t *dma_tx_buf;
+static uint8_t *dma_rx_buf;
+
+sensor_t *sensor;
+camera_sensor_info_t *info;
+
+CameraInfo camera_info;
+
+static inline size_t dmaAlignSize(size_t size) {
+    return (size + 3) & ~3;
+}
+
+static uint8_t *allocDMABuffer(size_t size) {
+    return (uint8_t *)heap_caps_calloc(size, 1, MALLOC_CAP_DMA);
+}
+
+static size_t spiSlaveTransact(const uint8_t *tx, uint8_t *rx, size_t len) {
+    spi_slave_transaction_t trans = {};
+    trans.length = len * 8;
+    trans.tx_buffer = tx;
+    trans.rx_buffer = rx;
+
+    esp_err_t err = spi_slave_transmit(SPI_SLAVE_HOST, &trans, portMAX_DELAY);
+    if (err != ESP_OK) {
+        Serial.printf("SPI slave transmit error: 0x%X\n", err);
+        return 0;
+    }
+    return trans.trans_len / 8;
+}
+
+#define MAX_QUEUED_TRANS 8
+static spi_slave_transaction_t queued_trans[MAX_QUEUED_TRANS];
+static size_t num_queued = 0;
+
+static esp_err_t spiSlaveQueue(const uint8_t *tx, uint8_t *rx, size_t len) {
+    if (num_queued >= MAX_QUEUED_TRANS) return ESP_ERR_NO_MEM;
+    spi_slave_transaction_t *t = &queued_trans[num_queued];
+    memset(t, 0, sizeof(*t));
+    t->length = len * 8;
+    t->tx_buffer = tx;
+    t->rx_buffer = rx;
+    esp_err_t err = spi_slave_queue_trans(SPI_SLAVE_HOST, t, portMAX_DELAY);
+    if (err == ESP_OK) num_queued++;
+    return err;
+}
+
+static void spiSlaveWaitAll() {
+    for (size_t i = 0; i < num_queued; i++) {
+        spi_slave_transaction_t *rtrans;
+        esp_err_t err = spi_slave_get_trans_result(SPI_SLAVE_HOST, &rtrans, portMAX_DELAY);
+        if (err == ESP_OK) {
+            Serial.printf("Transaction %u: %u bytes\n", i, rtrans->trans_len / 8);
+        } else {
+            Serial.printf("Transaction %u error: 0x%X\n", i, err);
+        }
+    }
+    num_queued = 0;
+}
+
+uint8_t initSPISlave() {
+    dma_tx_buf = allocDMABuffer(DMA_BUF_SIZE);
+    dma_rx_buf = allocDMABuffer(DMA_BUF_SIZE);
+    if (!dma_tx_buf || !dma_rx_buf) {
+        Serial.println("Failed to allocate DMA buffers");
+        return 0;
+    }
+
+    spi_bus_config_t bus_cfg = {};
+    bus_cfg.mosi_io_num = PIN_MOSI;
+    bus_cfg.miso_io_num = PIN_MISO;
+    bus_cfg.sclk_io_num = PIN_SCLK;
+    bus_cfg.quadwp_io_num = -1;
+    bus_cfg.quadhd_io_num = -1;
+    bus_cfg.max_transfer_sz = DMA_BUF_SIZE;
+    bus_cfg.flags = SPICOMMON_BUSFLAG_SLAVE;
+
+    spi_slave_interface_config_t slave_cfg = {};
+    slave_cfg.spics_io_num = PIN_CS;
+    slave_cfg.flags = 0;
+    slave_cfg.queue_size = 8;
+    // slave_cfg.mode = 3; // SPI_MODE3: CPOL=1, CPHA=1
+    slave_cfg.mode = 0; // SPI_MODE3: CPOL=1, CPHA=1
+
+    esp_err_t err = spi_slave_initialize(SPI_SLAVE_HOST, &bus_cfg, &slave_cfg, SPI_DMA_CH_AUTO);
+    if (err != ESP_OK) {
+        Serial.printf("Failed to initialize SPI slave: 0x%X\n", err);
+        return 0;
+    }
+
+    Serial.println("SPI slave initialized with DMA");
+    return 1;
+}
+
+uint8_t readCommand() {
+    memset(dma_tx_buf, 0, 4);
+    memset(dma_rx_buf, 0, 4);
+    dma_tx_buf[0] = READY_CODE;
+
+    size_t len = spiSlaveTransact(dma_tx_buf, dma_rx_buf, 4);
+    if (len > 0) {
+        uint8_t cmd = dma_rx_buf[0];
+        Serial.printf("Received SPI data, length: %u  cmd: %d\n", len, cmd);
+        return cmd;
+    } else {
+        Serial.println("No data received in transaction.");
+        return 0;
+    }
+}
+
+void executeCommand(const uint8_t cmd)
+{
+    size_t offset = 0;
+
+    // memset(dma_tx_buf, 0, 4);
+    // dma_tx_buf[0] = READY_CODE;
+    // spiSlaveQueue(dma_tx_buf, NULL, 4);
+    // offset = 4;
+
+    switch (cmd) {
+        case 0:
+            break;
+        case SPI_CMD_INIT:
+            Serial.println("Executing command 0x01(INIT): Initialize the camera");
+            break;
+        case SPI_CMD_GET_CAMERA_INFO: {
+            Serial.println("Executing command 0x02(GET_CAMERA_INFO): Get camera information");
+            size_t aligned_size = dmaAlignSize(sizeof(camera_info));
+            memset(dma_tx_buf + offset, 0, aligned_size);
+            CameraInfo *ci = (CameraInfo *)(dma_tx_buf + offset);
+            ci->width = 1280;
+            ci->height = 720;
+            ci->format = 0; // JPEG
+            ci->connected = 1;
+            // spiSlaveQueue(dma_tx_buf + offset, NULL, aligned_size);
+            Serial.printf("Transfer size: %d: ", sizeof(camera_info));
+            for(int i = 0;i < sizeof(camera_info); i++) {
+                Serial.printf("%02X ", dma_tx_buf[offset + i]);
+            }
+            Serial.println();
+            spiSlaveTransact(dma_tx_buf + offset, NULL, aligned_size);
+            Serial.printf("transfer size: %d\n", sizeof(camera_info));
+            break;
+        }
+        case SPI_CMD_GET_CAMERA_FRAME: {
+            Serial.println("Executing command 0x03(GET_CAMERA_FRAME): Get camera frame");
+            int frame_len = 0x1000;
+            Serial.printf("Sending camera frame, length: %u  int len: %d\n", frame_len, sizeof(int));
+
+            memcpy(dma_tx_buf + offset, &frame_len, sizeof(int));
+            spiSlaveQueue(dma_tx_buf + offset, NULL, sizeof(int));
+            offset += sizeof(int);
+
+            memcpy(dma_tx_buf + offset, capture_jpeg, frame_len);
+            spiSlaveQueue(dma_tx_buf + offset, NULL, frame_len);
+            break;
+        }
+        default:
+            Serial.println("Unknown command");
+    }
+
+    spiSlaveWaitAll();
+    Serial.println("Transaction completed");
+}

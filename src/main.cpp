@@ -70,10 +70,6 @@ void loop()
 {
     // Queue the transaction
     uint8_t cmd = readCommand();
-    if (cmd != 0) {
-        executeCommand(cmd);
-    } else {
-        Serial.println("No valid command received.");
-    }
+    executeCommand(cmd);
     // do something with received_bytes and rx_buf if needed
 }
