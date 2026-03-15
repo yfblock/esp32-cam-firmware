@@ -137,12 +137,16 @@ class UartPort:
             460800: termios.B460800,
             921600: termios.B921600,
         }
+        for extra in (1000000, 1500000, 2000000, 2500000, 3000000, 3500000, 4000000):
+            sym = getattr(termios, f"B{extra}", None)
+            if sym is not None:
+                baud_map[extra] = sym
         if baud not in baud_map:
             raise ValueError(f"unsupported baudrate: {baud}")
 
         speed = baud_map[baud]
-        termios.cfsetispeed(attrs, speed)
-        termios.cfsetospeed(attrs, speed)
+        attrs[4] = speed  # ispeed
+        attrs[5] = speed  # ospeed
         termios.tcsetattr(self.fd, termios.TCSANOW, attrs)
         termios.tcflush(self.fd, termios.TCIOFLUSH)
 
@@ -160,6 +164,7 @@ class UartPort:
 
     def read_slip_frame(self, timeout_s: float) -> bytes:
         deadline = time.monotonic() + timeout_s
+        print("read slip frame dead line: ")
 
         while True:
             end_idx = self._rx_buf.find(bytes([SLIP_END]))
@@ -181,7 +186,7 @@ class UartPort:
             rlist, _, _ = select.select([self.fd], [], [], remain)
             if not rlist:
                 continue
-            chunk = os.read(self.fd, 4096)
+            chunk = os.read(self.fd, 16384)
             if chunk:
                 self._rx_buf.extend(chunk)
 
@@ -264,7 +269,6 @@ def cmd_frame(proto: UartProtocol, out_path: str) -> None:
     rsp = proto.request(CMD_GET_CAMERA_FRAME)
     if len(rsp) < 4:
         raise RuntimeError("frame response too short, need 4-byte length")
-
     frame_len = struct.unpack("<I", rsp[:4])[0]
     print(f"[frame] expected length={frame_len}")
     if frame_len == 0 or frame_len > MAX_FRAME_SIZE:

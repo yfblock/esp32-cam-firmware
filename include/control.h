@@ -5,26 +5,34 @@
 #include <stdint.h>
 #endif
 
-#define SPI_CMD_INIT 0x1
-#define SPI_CMD_GET_CAMERA_INFO 0x2
-#define SPI_CMD_GET_CAMERA_FRAME 0x3
+// Command IDs
+#define CMD_INIT            0x01
+#define CMD_GET_CAMERA_INFO 0x02
+#define CMD_GET_CAMERA_FRAME 0x03
+#define CMD_PING            0x7F
 
-#define READY_CODE 0xA5
+// Response: request_id | RESP_MASK
+#define RESP_MASK           0x80
+#define RESP_FRAME_CHUNK    0x90
 
-#define SPI_READY_POLL_INTERVAL_US  200
-#define SPI_READY_TIMEOUT_MS        2000
-#define SPI_FRAME_CHUNK_SIZE        4096
-#define SPI_FRAME_MAX_SIZE          (512 * 1024)
+// SLIP framing
+#define SLIP_END            0xC0
+#define SLIP_ESC            0xDB
+#define SLIP_ESC_END        0xDC
+#define SLIP_ESC_ESC        0xDD
+
+// Frame transfer parameters
+#define FRAME_CHUNK_SIZE    4096
+#define FRAME_MAX_SIZE      (2 * 1024 * 1024)
 
 struct CameraInfo {
     uint16_t width;
     uint16_t height;
-    uint8_t format;     // e.g., 0 for JPEG, 1 for RAW
-    uint8_t connected;  // 0 for not connected, 1 for connected
+    uint8_t format;     // 0 = JPEG, 1 = RAW
+    uint8_t connected;  // 0 = disconnected, 1 = connected
 };
 
 #ifndef __KERNEL__
-uint8_t initSPISlave(void);
-uint8_t readCommand(void);
-void executeCommand(const uint8_t cmd);
+void initUart(void);
+void handleUart(void);
 #endif

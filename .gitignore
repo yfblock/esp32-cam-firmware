@@ -1,3 +1,6 @@
 .pio
 .vscode
 compile_commands.json
+esp_frame.jpg
+uart_client
+uart_client.o
