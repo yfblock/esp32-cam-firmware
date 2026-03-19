@@ -4,3 +4,5 @@ compile_commands.json
 esp_frame.jpg
 uart_client
 uart_client.o
+__pycache__
+uart_client_x86

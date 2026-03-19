@@ -164,7 +164,6 @@ class UartPort:
 
     def read_slip_frame(self, timeout_s: float) -> bytes:
         deadline = time.monotonic() + timeout_s
-        print("read slip frame dead line: ")
 
         while True:
             end_idx = self._rx_buf.find(bytes([SLIP_END]))

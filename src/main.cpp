@@ -41,7 +41,8 @@ static camera_config_t camera_config = {
     .pin_pclk = CAM_PIN_PCLK,
 
     //XCLK 20MHz or 10MHz for OV2640 double FPS (Experimental)
-    .xclk_freq_hz = 10000000,
+    // .xclk_freq_hz = 10000000,
+    .xclk_freq_hz = 16000000,
     .ledc_timer = LEDC_TIMER_0,
     .ledc_channel = LEDC_CHANNEL_0,
 
@@ -49,7 +50,7 @@ static camera_config_t camera_config = {
     .frame_size = FRAMESIZE_HD,    //QQVGA-UXGA, For ESP32, do not use sizes above QVGA when not JPEG. The performance of the ESP32-S series has improved a lot, but JPEG mode always gives better frame rates.
 
     .jpeg_quality = 12, //0-63, for OV series camera sensors, lower number means higher quality
-    .fb_count = 4,       //When jpeg mode is used, if fb_count more than one, the driver will work in continuous mode.
+    .fb_count = 2,       //When jpeg mode is used, if fb_count more than one, the driver will work in continuous mode.
     .grab_mode = CAMERA_GRAB_LATEST,
 };
 
@@ -57,6 +58,8 @@ void setup()
 {
     Serial1.begin(115200, SERIAL_8N1, 13, 15);
     esp_camera_init(&camera_config);
+    sensor_t *sensor = esp_camera_sensor_get();
+    sensor->set_vflip(sensor, 1);
     initUart();
     // sensor_t *sensor = esp_camera_sensor_get();
     // Serial.printf("Camera sensor initialization complete: %p.\n", (void*)sensor);
